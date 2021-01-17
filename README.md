@@ -12,3 +12,5 @@ SUDOERS
 ```
 
 > Reboot your system to be sure that sudoers applied
+
+Inspired by <https://github.com/sergeycherepanov/homebrew-docker-virtualbox>

@@ -1,6 +1,6 @@
 require 'formula'
 
-class DockerVirtualbox < Formula
+class DockerGobetween < Formula
   url "https://github.com/bassrock/docker-gobetween.git", :using => :git
   version "0.0.1"
   revision 1
