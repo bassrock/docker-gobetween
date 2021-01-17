@@ -1,7 +1,7 @@
 require 'formula'
 
 class DockerGobetween < Formula
-  url "https://github.com/bassrock/hombrew-docker-gobetween.git", :using => :git, :branch => "main"
+  url "https://github.com/bassrock/homebrew-docker-gobetween.git", :using => :git, :branch => "main"
   version "0.0.1"
   revision 1
 
