@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+set -e
+[[ $1 == "debug" ]] && {
+  set -x
+}
+if [[ $(id -u ${USER}) -eq 0 ]]; then
+  echo "Please don't run this script under the root user!"
+  exit 1
+fi
+LOGDIR="/tmp";
+
+[[ $1 != "debug" ]] && {
+    exec > ${LOGDIR}/docker-gobetween.log
+    exec 2>&1
+}
+
+START_TIME=$(date +%s)
+
+if [[ "Darwin" == "$(uname)" ]]; then
+    BREW_BIN=/usr/local/bin
+else
+    BREW_BIN=/home/linuxbrew/.linuxbrew/bin
+fi
+
+PATH="${PATH}:${BREW_BIN}"
+GOBETWEEN_BIN=$(brew --prefix)/opt/docker-gobetween/bin/gobetween
+JQ_BIN="$(brew --prefix jq)/bin/jq"
+DOCKER_MACHINE_BIN=$(brew --prefix docker-machine)/bin/docker-machine
+DOCKER_MACHINE_MACHINE_NAME=pve
+DOCKER_CLI_BIN_PATH=$(brew --prefix docker)/bin/docker
+DOCKER_MACHINE_IP=$(${DOCKER_MACHINE_BIN} ip ${DOCKER_MACHINE_MACHINE_NAME})
+
+
+# while [$(${DOCKER_MACHINE_BIN} status ${DOCKER_MACHINE_MACHINE_NAME}) != "Running"];
+# do
+#   echo "Docker machine not yet running. Sleeping"
+#   sleep 1
+# done
+
+
+echo "===> Starting Gobetween..."
+[[ -f /tmp/docker-gobetween.pid ]] && ps -p $(cat /tmp/docker-gobetween.pid) > /dev/null && {
+    echo "---> Gobetween already started, disabling outdated port forwarding..."
+    servers=$(curl --silent http://127.0.0.1:8181/servers | ${JQ_BIN} -r '. | keys | .[]')
+    for server in $servers;  do
+        echo "Disabling port forwarding for: ${server}"
+        curl --silent -X DELETE http://127.0.0.1:8181/servers/${server}
+    done
+} || {
+    sudo ${GOBETWEEN_BIN} -c $(brew --prefix)/etc/docker-gobetween/gobetween.toml > ${LOGDIR}/docker-gobetween.log 2>&1 &
+    echo $! > /tmp/docker-gobetween.pid
+    echo "---> Gobetween started"
+}
+
+eval $(docker-machine env ${DOCKER_MACHINE_MACHINE_NAME})
+
+echo ""
+echo "===> Listen for events..."
+while read -r event;
+do
+    subject=$(echo $event | awk '{ print $2 }')
+    action=$(echo $event | awk '{ print $3 }')
+    subjectid=$(echo $event | awk '{ print $4 }')
+    subjectid_short=$(echo $subjectid | cut -c -8)
+    if [[ "container" == ${subject} ]]; then
+        case $action in
+          "start")
+            ports="$(${DOCKER_CLI_BIN_PATH} inspect -f '{{range $p, $conf := .NetworkSettings.Ports }} {{ if $conf}} {{$conf}} {{end}} {{end}}' "${subjectid}" | sed -nE 's:\[\{[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}[^0-9]*([0-9]{1,})\}\]:\1:pg' | xargs echo -n)"
+            [[ -z ${ports} ]] || {
+                for port in $ports;  do
+                    echo ""
+                    echo "Enabling port forwarding: ${port} -> ${DOCKER_MACHINE_IP}:${port}"
+                    >&2 curl --silent -X POST --data "@-" http://127.0.0.1:8181/servers/${subjectid_short}_${port} <<JSON_BODY
+{
+  "backend_connection_timeout": "2s",
+  "backend_idle_timeout": "1m",
+  "balance": "weight",
+  "bind": ":${port}",
+  "client_idle_timeout": "1m",
+  "max_connections": 10000,
+  "protocol": "tcp",
+  "discovery": {
+    "kind": "static",
+    "static_list": [
+      "${DOCKER_MACHINE_IP}:${port} weight=1"
+    ]
+  }
+}
+JSON_BODY
+                done
+            }
+            ;;
+          "kill")
+            servers=$(curl --silent http://127.0.0.1:8181/servers | ${JQ_BIN} -r '. | keys | .[]' | grep ${subjectid_short} || echo "")
+            [[ $servers != "" ]] && {
+              for server in $servers;  do
+                  echo ""
+                  echo "Disabling port forwarding for: ${server}"
+                  curl --silent -X DELETE http://127.0.0.1:8181/servers/${server}
+              done
+            }
+            ;;
+          *)
+            # skipping
+            ;;
+        esac
+    fi
+done < <(${DOCKER_CLI_BIN_PATH} events --since "${START_TIME}")
+
+echo ""
+echo "===> service terminated"
