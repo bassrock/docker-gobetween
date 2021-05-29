@@ -2,7 +2,7 @@ require 'formula'
 
 class DockerGobetween < Formula
   url "https://github.com/bassrock/homebrew-docker-gobetween.git", :using => :git, :branch => "main"
-  version "0.0.1"
+  version "0.0.2"
   revision 1
 
   depends_on 'coreutils'
